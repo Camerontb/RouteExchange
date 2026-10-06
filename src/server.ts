@@ -2,15 +2,37 @@ import express from "express";
 import { config } from "./config.ts";
 import { getS124Objects } from "./secom/client.ts";
 import { s124ToGeoJSON } from "./secom/s124.ts";
+import type { AisRelay } from "./ais/relay.ts";
+import type { RouteHub } from "./exchange/hub.ts";
+import { PILOT_HTML, BRIDGE_HTML } from "./exchange/demo.ts";
 
-export function createServer() {
+export function createServer(relay: AisRelay | null = null, hub: RouteHub | null = null) {
   const app = express();
   app.use(express.json());
 
   // Liveness probe for Cloud Run.
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, service: "empx-mcp-gateway", secomConfigured: Boolean(config.secomS124BaseUrl) });
+    res.json({
+      ok: true,
+      service: "empx-mcp-gateway",
+      secomConfigured: Boolean(config.secomS124BaseUrl),
+      ais: relay
+        ? { enabled: true, leader: relay.isLeader(), activeOrgs: relay.activeOrgs().length }
+        : { enabled: false },
+      routeHub: hub ? { enabled: true, sessions: hub.activeSessions() } : { enabled: false },
+    });
   });
+
+  // Route exchange: hand an offer to the paired PPU. Live status + chat ride the
+  // WebSocket at /ws (see exchange/hub.ts). The in-browser demo clients:
+  app.post("/routes", (req, res) => {
+    if (!hub) return res.status(503).json({ error: "route_hub_disabled" });
+    const result = hub.submitRoute(req.body ?? {});
+    return res.status(result.error ? 409 : 200).json(result);
+  });
+  app.get("/demo", (_req, res) => res.redirect("/demo/pilot"));
+  app.get("/demo/pilot", (_req, res) => res.type("html").send(PILOT_HTML));
+  app.get("/demo/bridge", (_req, res) => res.type("html").send(BRIDGE_HTML));
 
   /**
    * S-124 navigational warnings as GeoJSON for EMPX.
