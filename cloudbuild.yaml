@@ -1,0 +1,45 @@
+# Build an immutable image, push it to Artifact Registry, and roll it out to
+# Cloud Run from service.yaml. Wired to a tag trigger (^v.*) so deploys stay
+# deliberate — a tag is the release gesture, not every push. Run by hand with:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=SHORT_SHA=$(git rev-parse --short HEAD)
+substitutions:
+  _REGION: us-central1
+  _REPO: empx-gateway
+  _SERVICE: empx-mcp-gateway
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA"
+        sed "s#IMAGE#${IMG}#" service.yaml > /workspace/service.resolved.yaml
+        gcloud run services replace /workspace/service.resolved.yaml \
+          --region ${_REGION} --quiet
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY

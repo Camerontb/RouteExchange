@@ -1,0 +1,53 @@
+# Cloud Run service definition for the EMPX gateway — the production source of
+# truth for how the service runs. Deployed with `gcloud run services replace`.
+#
+# The image is a placeholder (IMAGE); cloudbuild.yaml substitutes the
+# Artifact Registry tag it just built before applying this file. To deploy a
+# specific image by hand, sed IMAGE → the full tag first (see docs/DEPLOY.md).
+#
+# Shape (deliberate): a single always-on instance. The relay holds live
+# aisstream WebSockets, so it must not scale to zero, and its single-writer
+# lease (config.ts) makes a brief deploy overlap safe rather than doubling the
+# upstream connections. CPU is always allocated so the background sockets keep
+# running between HTTP requests.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: empx-mcp-gateway
+  labels:
+    cloud.googleapis.com/location: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/cpu-throttling: "false"
+    spec:
+      # Least privilege: created by scripts/setup-cloud.sh with only
+      # datastore.user + logging.logWriter — NOT the default compute SA (editor).
+      serviceAccountName: empx-gateway@mpx2-d9148.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: IMAGE
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: AIS_RELAY_ENABLED
+              value: "true"
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 30
