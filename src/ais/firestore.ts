@@ -57,28 +57,53 @@ function toAisstreamBoxes(raw: unknown): number[][][] {
  * the collection-group query keys on so it never trips over config/tugs or
  * config/formTemplate. Fires `onChange` with the full current set on any edit.
  * Returns an unsubscribe.
+ *
+ * A snapshot error (a missing index being built, a transient network blip)
+ * otherwise kills the listener for the life of the instance — the feeds then
+ * never start until a redeploy. So an error tears the listener down and
+ * re-subscribes after a short backoff instead of dying.
  */
 export function watchAisConfigs(onChange: (configs: OrgAisConfig[]) => void): () => void {
-  return firestore()
-    .collectionGroup("config")
-    .where("kind", "==", "ais")
-    .onSnapshot(
-      (snap) => {
-        const configs = snap.docs.map((d) => {
-          // .../orgs/{orgId}/config/ais
-          const orgId = d.ref.parent.parent?.id ?? "";
-          const data = d.data();
-          return {
-            orgId,
-            enabled: data.enabled === true,
-            boundingBoxes: toAisstreamBoxes(data.boundingBoxes),
-            keySet: data.keySet === true,
-          } satisfies OrgAisConfig;
-        });
-        onChange(configs.filter((c) => c.orgId));
-      },
-      (err) => console.error("[ais] config watch error:", err),
-    );
+  let unsub: (() => void) | null = null;
+  let retry: NodeJS.Timeout | null = null;
+  let stopped = false;
+
+  const subscribe = () => {
+    if (stopped) return;
+    unsub = firestore()
+      .collectionGroup("config")
+      .where("kind", "==", "ais")
+      .onSnapshot(
+        (snap) => {
+          const configs = snap.docs.map((d) => {
+            // .../orgs/{orgId}/config/ais
+            const orgId = d.ref.parent.parent?.id ?? "";
+            const data = d.data();
+            return {
+              orgId,
+              enabled: data.enabled === true,
+              boundingBoxes: toAisstreamBoxes(data.boundingBoxes),
+              keySet: data.keySet === true,
+            } satisfies OrgAisConfig;
+          });
+          onChange(configs.filter((c) => c.orgId));
+        },
+        (err) => {
+          console.error("[ais] config watch error (retrying in 10s):", err);
+          unsub?.();
+          unsub = null;
+          if (!stopped && !retry) retry = setTimeout(() => { retry = null; subscribe(); }, 10_000);
+        },
+      );
+  };
+
+  subscribe();
+
+  return () => {
+    stopped = true;
+    if (retry) clearTimeout(retry);
+    unsub?.();
+  };
 }
 
 /** Read an org's write-only aisstream key. Returns "" if none is set. */
