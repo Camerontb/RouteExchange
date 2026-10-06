@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.env
+.env.local
+*.pem
+*.p12
+*.key
+certs
+.DS_Store
+*.log
