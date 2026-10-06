@@ -33,10 +33,8 @@ steps:
       - -c
       - |
         set -euo pipefail
-        IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA"
-        sed "s#IMAGE#${IMG}#" service.yaml > /workspace/service.resolved.yaml
-        gcloud run services replace /workspace/service.resolved.yaml \
-          --region ${_REGION} --quiet
+        sed "s#IMAGE#${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA#" service.yaml > /workspace/service.resolved.yaml
+        gcloud run services replace /workspace/service.resolved.yaml --region ${_REGION} --quiet
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
